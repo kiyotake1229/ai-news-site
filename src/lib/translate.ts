@@ -18,11 +18,13 @@ export async function translateText(
 
   try {
     const params = new URLSearchParams({
-      q: text.substring(0, 500), // API制限対策
+      q: text.substring(0, 500),
       langpair: `${sourceLang}|${targetLang}`,
     });
 
     const response = await fetch(`${MYMEMORY_API}?${params}`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
     const data = await response.json();
 
     if (data.responseStatus === 200 && data.responseData?.translatedText) {
@@ -38,18 +40,18 @@ export async function translateText(
   }
 }
 
+const BATCH_SIZE = 5;
+
 export async function translateBatch(
   texts: string[],
   targetLang: 'ja' | 'en'
 ): Promise<string[]> {
-  // 並列で翻訳（ただしレート制限を考慮して少し間隔を空ける）
   const results: string[] = [];
 
-  for (const text of texts) {
-    const translated = await translateText(text, targetLang);
-    results.push(translated);
-    // レート制限対策で少し待機
-    await new Promise((resolve) => setTimeout(resolve, 100));
+  for (let i = 0; i < texts.length; i += BATCH_SIZE) {
+    const chunk = texts.slice(i, i + BATCH_SIZE);
+    const translated = await Promise.all(chunk.map((t) => translateText(t, targetLang)));
+    results.push(...translated);
   }
 
   return results;

@@ -1,4 +1,5 @@
 import { NewsItem } from '@/types/news';
+import { MAX_FAVORITES } from './constants';
 
 const STORAGE_KEY = 'ai-news-favorites';
 
@@ -15,10 +16,14 @@ export function getFavorites(): NewsItem[] {
 
 export function addFavorite(news: NewsItem): void {
   const favorites = getFavorites();
-  if (!favorites.some((f) => f.link === news.link)) {
-    favorites.unshift(news);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(favorites));
+  if (favorites.some((f) => f.link === news.link)) return;
+
+  if (favorites.length >= MAX_FAVORITES) {
+    favorites.pop(); // 古いものを削除
   }
+
+  favorites.unshift(news);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(favorites));
 }
 
 export function removeFavorite(link: string): void {

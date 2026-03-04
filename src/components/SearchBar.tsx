@@ -1,17 +1,30 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 interface SearchBarProps {
   onSearch: (query: string) => void;
+  value?: string;
 }
 
-export function SearchBar({ onSearch }: SearchBarProps) {
-  const [query, setQuery] = useState('');
+export function SearchBar({ onSearch, value }: SearchBarProps) {
+  const [query, setQuery] = useState(value ?? '');
+
+  // 外部からの value 変更に追従（トレンドキーワードクリック時）
+  useEffect(() => {
+    if (value !== undefined) {
+      setQuery(value);
+    }
+  }, [value]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onSearch(query);
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setQuery(e.target.value);
+    if (e.target.value === '') onSearch('');
   };
 
   const handleClear = () => {
@@ -27,7 +40,7 @@ export function SearchBar({ onSearch }: SearchBarProps) {
           <input
             type="text"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={handleChange}
             placeholder="キーワードで検索..."
             className="w-full px-5 py-4 pl-12 pr-24 bg-transparent border-0 focus:ring-0 focus:outline-none text-slate-800 dark:text-white placeholder-slate-400 dark:placeholder-slate-500"
           />

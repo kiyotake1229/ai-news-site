@@ -1,8 +1,14 @@
 'use client';
 
 import { ThemeToggle } from './ThemeToggle';
+import { useLastUpdated } from '@/lib/lastUpdatedContext';
 
 export function Header() {
+  const { lastUpdated } = useLastUpdated();
+  const minutesAgo = lastUpdated
+    ? Math.floor((Date.now() - lastUpdated.getTime()) / 60000)
+    : null;
+
   return (
     <header className="glass sticky top-0 z-50 border-b border-white/10">
       <div className="max-w-5xl mx-auto px-4 py-4">
@@ -15,11 +21,9 @@ export function Header() {
               <div className="absolute -top-1 -right-1 w-3 h-3 bg-green-400 rounded-full border-2 border-white dark:border-slate-800 pulse-glow"></div>
             </div>
             <div>
-              <h1 className="text-xl font-bold gradient-text">
-                AI News Hub
-              </h1>
+              <h1 className="text-xl font-bold gradient-text">AI News Hub</h1>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                リアルタイムAI情報
+                {minutesAgo !== null ? `${minutesAgo}分前に更新` : 'AIニュース自動収集'}
               </p>
             </div>
           </div>
@@ -30,7 +34,7 @@ export function Header() {
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
               </span>
               <span className="text-xs font-medium text-indigo-600 dark:text-indigo-400">
-                自動更新中
+                {minutesAgo !== null ? `${minutesAgo}分前に更新` : '30分ごとに自動更新'}
               </span>
             </div>
             <ThemeToggle />

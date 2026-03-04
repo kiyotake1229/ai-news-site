@@ -6,84 +6,161 @@ import { pickupWebDevNews } from '@/lib/pickup';
 import { NewsList } from '@/components/NewsList';
 import { PickupSection } from '@/components/PickupSection';
 import { RSS_FEEDS } from '@/lib/feeds';
+import { getCachedNews, setCachedNews } from '@/lib/cache';
+import { useLastUpdated } from '@/lib/lastUpdatedContext';
+import { TrendingKeywords } from '@/components/TrendingKeywords';
+import {
+  CORS_PROXIES,
+  FETCH_TIMEOUT_MS,
+  ITEMS_PER_FEED,
+  MAX_DESCRIPTION_LENGTH,
+  AUTO_REFRESH_INTERVAL,
+} from '@/lib/constants';
 
-// CORSプロキシ経由でRSSを取得
-async function fetchFeedsClient(): Promise<NewsItem[]> {
+// ---- モジュールレベル（React に依存しない） ----
+
+async function fetchWithProxy(url: string): Promise<string> {
+  for (const proxy of CORS_PROXIES) {
+    try {
+      const res = await fetch(proxy + encodeURIComponent(url), {
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      });
+      if (res.ok) {
+        return await res.text();
+      }
+    } catch {
+      // 次のプロキシを試す
+    }
+  }
+  throw new Error(`All proxies failed for ${url}`);
+}
+
+async function fetchAllFeeds(): Promise<NewsItem[]> {
   const allNews: NewsItem[] = [];
-  const CORS_PROXY = 'https://api.allorigins.win/raw?url=';
 
   const feedPromises = RSS_FEEDS.map(async (feed) => {
     try {
-      const response = await fetch(CORS_PROXY + encodeURIComponent(feed.url), {
-        signal: AbortSignal.timeout(15000),
-      });
-      if (!response.ok) return [];
-
-      const text = await response.text();
+      const text = await fetchWithProxy(feed.url);
       const parser = new DOMParser();
       const xml = parser.parseFromString(text, 'text/xml');
 
-      // RSS 2.0
-      const items = xml.querySelectorAll('item');
-      // Atom
-      const entries = xml.querySelectorAll('entry');
-
       const newsItems: NewsItem[] = [];
 
-      items.forEach((item) => {
-        if (newsItems.length >= 10) return;
+      // RSS 2.0 / RSS 1.0
+      xml.querySelectorAll('item').forEach((item) => {
+        if (newsItems.length >= ITEMS_PER_FEED) return;
         newsItems.push({
-          title: item.querySelector('title')?.textContent || 'タイトルなし',
-          link: item.querySelector('link')?.textContent || '#',
-          pubDate: item.querySelector('pubDate')?.textContent || new Date().toISOString(),
+          title: item.querySelector('title')?.textContent?.trim() || 'タイトルなし',
+          link: item.querySelector('link')?.textContent?.trim() || '#',
+          pubDate:
+            item.querySelector('pubDate')?.textContent ||
+            item.querySelector('date')?.textContent ||
+            new Date().toISOString(),
           source: feed.name,
           sourceUrl: feed.url,
-          description: item.querySelector('description')?.textContent?.replace(/<[^>]*>/g, '').substring(0, 300) || '',
+          description:
+            item
+              .querySelector('description')
+              ?.textContent?.replace(/<[^>]*>/g, '')
+              .trim()
+              .substring(0, MAX_DESCRIPTION_LENGTH) || '',
           categories: [feed.category],
         });
       });
 
-      entries.forEach((entry) => {
-        if (newsItems.length >= 10) return;
-        const link = entry.querySelector('link')?.getAttribute('href') || entry.querySelector('link')?.textContent || '#';
+      // Atom
+      xml.querySelectorAll('entry').forEach((entry) => {
+        if (newsItems.length >= ITEMS_PER_FEED) return;
+        const link =
+          entry.querySelector('link')?.getAttribute('href') ||
+          entry.querySelector('link')?.textContent?.trim() ||
+          '#';
         newsItems.push({
-          title: entry.querySelector('title')?.textContent || 'タイトルなし',
+          title: entry.querySelector('title')?.textContent?.trim() || 'タイトルなし',
           link,
-          pubDate: entry.querySelector('published')?.textContent || entry.querySelector('updated')?.textContent || new Date().toISOString(),
+          pubDate:
+            entry.querySelector('published')?.textContent ||
+            entry.querySelector('updated')?.textContent ||
+            new Date().toISOString(),
           source: feed.name,
           sourceUrl: feed.url,
-          description: entry.querySelector('summary')?.textContent?.replace(/<[^>]*>/g, '').substring(0, 300) || entry.querySelector('content')?.textContent?.replace(/<[^>]*>/g, '').substring(0, 300) || '',
+          description:
+            entry
+              .querySelector('summary')
+              ?.textContent?.replace(/<[^>]*>/g, '')
+              .trim()
+              .substring(0, MAX_DESCRIPTION_LENGTH) ||
+            entry
+              .querySelector('content')
+              ?.textContent?.replace(/<[^>]*>/g, '')
+              .trim()
+              .substring(0, MAX_DESCRIPTION_LENGTH) ||
+            '',
           categories: [feed.category],
         });
       });
 
       return newsItems;
-    } catch {
-      console.error(`Failed to fetch ${feed.name}`);
+    } catch (e) {
+      console.warn(`[RSS] Failed: ${feed.name}`, e);
       return [];
     }
   });
 
   const results = await Promise.allSettled(feedPromises);
-  results.forEach((result) => {
-    if (result.status === 'fulfilled') {
-      allNews.push(...result.value);
-    }
+  results.forEach((r) => {
+    if (r.status === 'fulfilled') allNews.push(...r.value);
   });
 
+  // 日付降順 + 重複除去
   allNews.sort((a, b) => new Date(b.pubDate).getTime() - new Date(a.pubDate).getTime());
-  return allNews;
+  const seen = new Set<string>();
+  return allNews.filter((item) => {
+    if (seen.has(item.link)) return false;
+    seen.add(item.link);
+    return true;
+  });
 }
+
+// ---- コンポーネント ----
 
 export default function Home() {
   const [news, setNews] = useState<NewsItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  const { lastUpdated, setLastUpdated } = useLastUpdated();
 
   useEffect(() => {
-    fetchFeedsClient().then((items) => {
-      setNews(items);
+    // キャッシュがあれば即表示
+    const cached = getCachedNews();
+    if (cached && cached.length > 0) {
+      setNews(cached);
+      setLoading(false);
+    }
+
+    // フェッシュ取得（元のコードと同じパターン）
+    fetchAllFeeds().then((items) => {
+      if (items.length > 0) {
+        setNews(items);
+        setCachedNews(items);
+        setLastUpdated(new Date());
+      }
       setLoading(false);
     });
+
+    // 自動更新
+    const interval = setInterval(() => {
+      fetchAllFeeds().then((items) => {
+        if (items.length > 0) {
+          setNews(items);
+          setCachedNews(items);
+          setLastUpdated(new Date());
+        }
+      });
+    }, AUTO_REFRESH_INTERVAL);
+
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const pickups = pickupWebDevNews(news);
@@ -123,7 +200,9 @@ export default function Home() {
             <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
           </span>
           <span className="text-sm font-medium text-indigo-600 dark:text-indigo-400">
-            リアルタイム更新
+            {lastUpdated
+              ? `更新: ${Math.floor((Date.now() - lastUpdated.getTime()) / 60000)}分前`
+              : '30分ごとに自動更新'}
           </span>
         </div>
         <h2 className="text-3xl sm:text-4xl font-bold mb-4">
@@ -137,10 +216,17 @@ export default function Home() {
         </p>
       </div>
 
-      {/* Web開発者向けPickupセクション */}
       <PickupSection pickups={pickups} />
 
-      {/* 全ニュース一覧 */}
+      {/* トレンドキーワード */}
+      {news.length > 0 && (
+        <TrendingKeywords
+          news={news}
+          onKeywordClick={setSearchQuery}
+          activeKeyword={searchQuery}
+        />
+      )}
+
       <div className="space-y-6">
         <div className="flex items-center gap-3">
           <div className="h-8 w-1 rounded-full bg-gradient-to-b from-indigo-500 to-purple-500"></div>
@@ -148,7 +234,7 @@ export default function Home() {
             すべてのニュース
           </h2>
         </div>
-        <NewsList initialNews={news} />
+        <NewsList initialNews={news} externalSearch={searchQuery} onExternalSearchChange={setSearchQuery} />
       </div>
     </div>
   );

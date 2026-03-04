@@ -2,8 +2,19 @@
 
 import { useState, useEffect } from 'react';
 import { PickupResult } from '@/lib/pickup';
-import { formatDate } from '@/lib/rss';
 import { translateText } from '@/lib/translate';
+
+function formatDate(dateString: string): string {
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  if (diffHours < 1) return '1時間以内';
+  if (diffHours < 24) return `${diffHours}時間前`;
+  if (diffDays < 7) return `${diffDays}日前`;
+  return date.toLocaleDateString('ja-JP', { year: 'numeric', month: 'short', day: 'numeric' });
+}
 
 interface PickupSectionProps {
   pickups: PickupResult[];
